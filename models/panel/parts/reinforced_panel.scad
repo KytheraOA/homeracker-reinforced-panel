@@ -3,8 +3,8 @@
 // Modification of `rackpanel` that uses the standard 15mm HomeRacker support unit.
 // Revisions by Kythera of Anevern (using Atlassian's Rovo, because Kythera can't code).
 
-include <../lib/truss_panel.scad>
-include <../lib/truss_split.scad>
+include <../lib/reinforced_panel.scad>
+include <../lib/reinforced_split.scad>
 
 /* [General Parameters] */
 // Panel width in 15mm units

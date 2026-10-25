@@ -1,7 +1,7 @@
-// HomeRacker - Panel Split Library (version for truss_panel.scad)
+// HomeRacker - Reinforced Panel Split Library
 //
 // This library provides the split-connector logic used to create a vertical split 
-// in the "truss panels" created with truss_panel.scad.
+// in the "reinforced panels" created with reinforced_panel.scad.
 // It has been adapted from the original 44.45mm server standard to the 
 // 15mm HomeRacker standard support unit grid.
 // This revised version was created by Kythera of Anevern, with help from Atlassian's Rovo AI 

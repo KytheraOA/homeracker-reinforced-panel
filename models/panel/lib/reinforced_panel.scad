@@ -1,4 +1,4 @@
-// HomeRacker - Rack panel library (truss_panel.scad version)
+// HomeRacker - Reinforced Panel library
 //
 // This file is part of the HomeRacker implementation by KellerLab.
 // It has been adapted from the original standard 10"/19" to the 15mm HomeRacker standard support unit grid.
