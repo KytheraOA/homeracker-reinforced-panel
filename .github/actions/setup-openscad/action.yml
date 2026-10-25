@@ -1,0 +1,88 @@
+---
+name: Setup OpenSCAD
+description: >
+  Install system dependencies, OpenSCAD, and libraries with caching.
+  Requires ubuntu runners.
+
+inputs:
+  scadm-version:
+    description: Pinned scadm PyPI version. Takes precedence over scadm-requirements.
+    required: false
+    default: ''
+  scadm-requirements:
+    description: >
+      Path to a requirements.txt containing a pinned scadm version (e.g. scadm==0.6.3).
+      Used when scadm-version is not set.
+    required: false
+    default: ''
+  scadm-source:
+    description: >
+      Local path to install scadm from (editable install).
+      When set, overrides both scadm-version and scadm-requirements.
+    required: false
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: '3.15'
+
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends xvfb libglu1-mesa libfuse2 libegl1 libxcb-cursor0
+
+    - name: Resolve scadm version
+      id: resolve-scadm
+      shell: bash
+      env:
+        SCADM_SOURCE: ${{ inputs.scadm-source }}
+        SCADM_VERSION: ${{ inputs.scadm-version }}
+        SCADM_REQUIREMENTS: ${{ inputs.scadm-requirements }}
+      run: |
+        if [[ -n "$SCADM_SOURCE" ]]; then
+          echo "version=source" >> "$GITHUB_OUTPUT"
+        elif [[ -n "$SCADM_VERSION" ]]; then
+          echo "version=$SCADM_VERSION" >> "$GITHUB_OUTPUT"
+        elif [[ -n "$SCADM_REQUIREMENTS" ]]; then
+          if [[ ! -f "$SCADM_REQUIREMENTS" ]]; then
+            echo "::error::scadm-requirements file not found: $SCADM_REQUIREMENTS"
+            exit 1
+          fi
+          version=$(sed -n 's/^[[:space:]]*scadm==\([^[:space:]#]*\).*/\1/p' "$SCADM_REQUIREMENTS")
+          if [[ -z "$version" ]]; then
+            echo "::error::scadm not found in $SCADM_REQUIREMENTS"
+            exit 1
+          fi
+          if [[ $(echo "$version" | wc -l) -ne 1 ]]; then
+            echo "::error::Multiple scadm entries found in $SCADM_REQUIREMENTS"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+        else
+          echo "::error::One of scadm-version, scadm-requirements, or scadm-source must be provided"
+          exit 1
+        fi
+
+    - name: Cache OpenSCAD and libraries
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: bin/openscad
+        key: openscad-${{ runner.os }}-${{ steps.resolve-scadm.outputs.version }}-${{ hashFiles('scadm.json') }}
+
+    - name: Install OpenSCAD and dependencies
+      shell: bash
+      env:
+        SCADM_SOURCE: ${{ inputs.scadm-source }}
+        SCADM_VERSION: ${{ steps.resolve-scadm.outputs.version }}
+      run: |
+        if [[ -n "$SCADM_SOURCE" ]]; then
+          pip install -e "$SCADM_SOURCE"
+        else
+          pip install "scadm==$SCADM_VERSION"
+        fi
+        scadm install

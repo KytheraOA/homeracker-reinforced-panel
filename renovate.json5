@@ -1,0 +1,137 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":enablePreCommit",
+    // Keeps every action reference on a full commit SHA. A tag is a moving target an upstream
+    // owner can repoint at any time; a digest cannot be changed under us.
+    "helpers:pinGitHubActionDigests",
+    // Version-tracks camunda/infra-global-github-actions sub-action pins (`# <family>-X.Y.Z`),
+    // which the built-in github-actions manager cannot tell apart per family.
+    "github>camunda/infra-global-github-actions:renovate-action-versions.json5",
+    "local>kellerlabs/homeracker:renovate-dependencies.json"
+  ],
+  // Ignore any repository config presets
+  "ignorePresets": [":all"],
+  // Disable platform-native automerge, let Renovate handle merges directly
+  "platformAutomerge": false,
+  // The scadfmt agent commits onto the OpenSCAD nightly PR. Ignoring its commits keeps that PR
+  // Renovate's own, so it still automerges once a person approves (see scadfmt-agent.yml).
+  "gitIgnoredAuthors": ["scadfmt-agent@users.noreply.github.com"],
+  // Disable hourly PR limit (default from config:recommended is 2)
+  "prHourlyLimit": 0,
+  // A release must be public for five days before Renovate proposes it, so a compromised
+  // publish has time to be caught and yanked before it reaches a branch here.
+  "minimumReleaseAge": "5 days",
+  // The openscad HTML datasource and the BOSL2 git-refs digest carry no release timestamp.
+  // The default of timestamp-required would suppress those updates outright rather than
+  // just exempt them from the wait, so they are let through and npm keeps the five days.
+  "minimumReleaseAgeBehaviour": "timestamp-optional",
+  // Without this, an update that has not served its five days still gets a branch and a PR.
+  "internalChecksFilter": "strict",
+  "schedule": ["* * * * 0,6"],
+  // Use "deps" as commit type instead of "chore(deps)"
+  "semanticCommits": "enabled",
+  "semanticCommitType": "deps",
+  "semanticCommitScope": null,
+  // Package rules to group updates and override semanticPrefixFixDepsChoreOthers preset
+  "packageRules": [
+    // Override the semanticPrefixFixDepsChoreOthers preset from config:recommended
+    // That preset sets semanticCommitType to "chore" for everything by default
+    {
+      "matchPackageNames": ["*"],
+      "semanticCommitType": "deps"
+    },
+    {
+      "matchDatasources": ["custom.openscad-snapshots"],
+      "groupName": "OpenSCAD nightly",
+      "groupSlug": "openscad-nightly",
+      "separateMajorMinor": false,
+      "schedule": ["* * * * 6"],
+      "automerge": true
+    },
+    {
+      // Group all GitHub Actions updates together
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "groupSlug": "github-actions",
+      "automerge": true
+    },
+    {
+      // Since we have a test-suite running (pre-commit), we can safely automerge the following dependencies
+      // If checks fail, Renovate will not automerge
+      "matchPackageNames": [
+        "BelfrySCAD/BOSL2",
+        "kellerlab-pre-commit-hooks",
+        "markdown"
+      ],
+      "schedule": ["* * * * 6"],
+      "automerge": true
+    },
+    {
+      // The custom manager strips the per-action tag prefix, so these arrive as plain semver
+      // and need no versioning override. Matching on packageName covers both the sub-action
+      // depNames the custom manager emits and any bare reference to the repository.
+      "matchPackageNames": ["camunda/infra-global-github-actions"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["pre-commit"],
+      "groupName": "pre-commit hooks",
+      "groupSlug": "pre-commit-hooks",
+      "separateMajorMinor": false,
+      "schedule": ["before 5am on the first day of the month"],
+      "automerge": true
+    },
+    {
+      // One PR per npm batch, so updates are tested together rather than merged one at a
+      // time where each can break the last. separateMajorMinor still splits majors off, so
+      // this yields two streams: patches and minors in one PR, majors in another.
+      "matchManagers": ["npm"],
+      "groupName": "npm dependencies",
+      "groupSlug": "npm"
+    },
+    {
+      // The 7.0 line ships no compiler API, which typescript-eslint and @astrojs/check need.
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7 || >=7.1"
+    },
+    {
+      // Kept out of the npm group: three is 0.x and treats minors as breaking, so it needs
+      // reading on its own. Its types share the version line.
+      "matchPackageNames": ["three", "@types/three"],
+      "groupName": "three.js",
+      "groupSlug": "three-js"
+    },
+    // Automerge allow-list, patches and minors. The E2E suite (site/e2e/, see
+    // docs/decisions/e2e-test-site-and-configurator-with-playwright.md) renders every page and
+    // drives the configurator, so a runtime break fails the PR instead of merging. Majors are
+    // read by hand.
+    //
+    // Add a package here deliberately as it is adopted. A new dependency is reviewed until
+    // someone lists it. three and @types/three are absent on purpose: three is 0.x and does
+    // not follow semver, so even a patch can carry a breaking change.
+    {
+      "matchPackageNames": [
+        "astro",
+        "@astrojs/check",
+        "@astrojs/markdown-remark",
+        "@playwright/test",
+        "eslint",
+        "@eslint/js",
+        "typescript-eslint",
+        "typescript",
+        "vitest",
+        "vite",
+        "sharp",
+        "@fontsource/orbitron",
+        "@fontsource/source-code-pro",
+        "@types/hast",
+        "@types/node",
+        "hast-util-to-string",
+        "unist-util-visit"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    }
+  ]
+}

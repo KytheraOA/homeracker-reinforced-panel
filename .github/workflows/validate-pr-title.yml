@@ -1,0 +1,30 @@
+---
+name: Validate PR Title
+
+# Required directly next to check-results: it runs on title edits, which ci.yml does not.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        uses: camunda/infra-global-github-actions/teams/infra/pull-request/validate-title@7fe5cca167f7826bedbc078ae36ff2e974cc8cb5 # pull-request-1.1.1
+        with:
+          # Keep in sync with .github/config/release-please-config.json changelog-sections
+          types: |
+            feat
+            feat!
+            fix
+            fix!
+            deps
+            docs
+            ci
+            test
+            chore
+            refactor

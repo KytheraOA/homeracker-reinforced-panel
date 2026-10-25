@@ -1,0 +1,35 @@
+---
+name: Validate OpenSCAD Models
+
+on:
+  workflow_call:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup OpenSCAD
+        uses: ./.github/actions/setup-openscad
+        with:
+          scadm-source: cmd/scadm
+
+      - name: Validate models
+        run: |
+          chmod +x cmd/test/test-models.sh
+          ./cmd/test/test-models.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: render-logs
+          path: /tmp/*.log
+          retention-days: 7

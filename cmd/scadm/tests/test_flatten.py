@@ -1,0 +1,1319 @@
+"""Tests for scadm.flatten module."""
+
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import scadm.flatten as flatten_mod
+from scadm.flatten import (
+    _Definition,
+    _extract_hidden_section,
+    _strip_comments,
+    _extract_main_code,
+    _find_used_names,
+    _parse_definitions,
+    _resolve_dependencies,
+    compute_checksum,
+    flatten_all,
+    flatten_file,
+)
+
+
+def _make_workspace(root: Path, *, deps: str = '{"dependencies": []}') -> None:
+    """Create a minimal scadm workspace at *root*."""
+    (root / "bin" / "openscad" / "libraries").mkdir(parents=True)
+    (root / "scadm.json").write_text(deps + "\n", encoding="utf-8")
+
+
+def _flatten(root: Path, input_file: Path) -> str:
+    """Run flatten_file and return the output text."""
+    output_file = root / "out" / input_file.name
+    flatten_file(input_file, output_file, workspace_root=root)
+    return output_file.read_text(encoding="utf-8")
+
+
+class ParseDefinitionsTests(unittest.TestCase):
+    """Unit tests for the _parse_definitions helper."""
+
+    def test_parses_simple_variable(self):
+        defs = _parse_definitions("FOO = 42;")
+        self.assertEqual(len(defs), 1)
+        self.assertEqual(defs[0].kind, "variable")
+        self.assertEqual(defs[0].name, "FOO")
+
+    def test_parses_multiline_variable(self):
+        defs = _parse_definitions("BAR =\n  [1,2,\n  3];")
+        self.assertEqual(len(defs), 1)
+        self.assertEqual(defs[0].name, "BAR")
+        self.assertEqual(len(defs[0].lines), 3)
+
+    def test_parses_module(self):
+        defs = _parse_definitions("module foo() {\n  cube(1);\n}")
+        self.assertEqual(len(defs), 1)
+        self.assertEqual(defs[0].kind, "module")
+        self.assertEqual(defs[0].name, "foo")
+
+    def test_parses_function(self):
+        defs = _parse_definitions("function bar(x) = x * 2;")
+        self.assertEqual(len(defs), 1)
+        self.assertEqual(defs[0].kind, "function")
+        self.assertEqual(defs[0].name, "bar")
+
+    def test_parses_multiline_function_with_semicolon_in_string(self):
+        # A ';' inside an echo() warning string must not terminate the function
+        # early — it used to drop the trailing ': 20;' body line, producing a
+        # truncated (syntactically invalid) flattened function.
+        src = 'function f(x) =\n  x == 1\n    ? echo("need a; got b") 10\n  : 20;\n'
+        defs = _parse_definitions(src)
+        self.assertEqual(len(defs), 1)
+        self.assertEqual(defs[0].kind, "function")
+        self.assertEqual(defs[0].name, "f")
+        self.assertEqual(len(defs[0].lines), 4)
+        self.assertIn(": 20;", defs[0].lines[-1])
+
+    def test_parses_multiline_variable_with_semicolon_in_string(self):
+        # Same regression for multi-line variable assignments.
+        src = 'MSG =\n  str("a; b",\n  "c");\n'
+        defs = _parse_definitions(src)
+        self.assertEqual(len(defs), 1)
+        self.assertEqual(defs[0].kind, "variable")
+        self.assertEqual(defs[0].name, "MSG")
+        self.assertEqual(len(defs[0].lines), 3)
+
+    def test_parses_mixed_content(self):
+        content = "A = 1;\nmodule m() { cube(A); }\nB = 2;"
+        defs = _parse_definitions(content)
+        self.assertEqual(len(defs), 3)
+        names = [d.name for d in defs]
+        self.assertEqual(names, ["A", "m", "B"])
+
+    def test_ignores_section_markers(self):
+        content = "/* [Hidden] */\nX = 1;\nmodule m() { }"
+        defs = _parse_definitions(content)
+        names = [d.name for d in defs]
+        self.assertIn("X", names)
+        self.assertIn("m", names)
+
+    def test_preserves_origin(self):
+        defs = _parse_definitions("A = 1;", origin="constants.scad")
+        self.assertEqual(defs[0].origin, "constants.scad")
+
+    def test_full_output_of_every_definition_shape(self):
+        src = (
+            "include <BOSL2/std.scad>\n"
+            "A = 1;\n"
+            "  use <lib/x.scad>\n"
+            "/* [Hidden] */ H = 2;\n"
+            "V = [\n"
+            "  1,\n"
+            "  2];\n"
+            "function one(x) = x + 1;\n"
+            "function multi(x) =\n"
+            "  x\n"
+            "  * 2;\n"
+            "module braces() {\n"
+            "  if (true) {\n"
+            "    cube(1);\n"
+            "  }\n"
+            "}\n"
+            "module sig(\n"
+            "  a = 1,\n"
+            "  b = 2\n"
+            ") {\n"
+            "  if (a) { cube(b); }\n"
+            "  sphere(a);\n"
+            "}\n"
+            "cube(A);\n"
+            "module open_at_eof() {\n"
+            "  cube(1);"
+        )
+        expected = [
+            ("variable", "A", ["A = 1;"]),
+            ("variable", "H", [" H = 2;"]),
+            ("variable", "V", ["V = [", "  1,", "  2];"]),
+            ("function", "one", ["function one(x) = x + 1;"]),
+            ("function", "multi", ["function multi(x) =", "  x", "  * 2;"]),
+            ("module", "braces", ["module braces() {", "  if (true) {", "    cube(1);", "  }", "}"]),
+            (
+                "module",
+                "sig",
+                ["module sig(", "  a = 1,", "  b = 2", ") {", "  if (a) { cube(b); }", "  sphere(a);", "}"],
+            ),
+            ("module", "open_at_eof", ["module open_at_eof() {", "  cube(1);"]),
+        ]
+        defs = _parse_definitions(src, origin="all.scad")
+        self.assertEqual([(d.kind, d.name, d.lines) for d in defs], expected)
+        self.assertEqual({d.origin for d in defs}, {"all.scad"})
+
+    def test_unterminated_function_and_variable_at_eof(self):
+        self.assertEqual(_parse_definitions("function f(x) =\n  x")[0].lines, ["function f(x) =", "  x"])
+        self.assertEqual(_parse_definitions("V = [\n  1")[0].lines, ["V = [", "  1"])
+
+    def test_signature_without_brace_at_eof(self):
+        self.assertEqual(_parse_definitions("module m(\n  a")[0].lines, ["module m(", "  a"])
+
+    def test_signature_with_body_on_brace_line(self):
+        src = "module m(\n  a\n) { cube(a); }\nB = 1;"
+        self.assertEqual(
+            [(d.name, d.lines) for d in _parse_definitions(src)],
+            [("m", ["module m(", "  a", ") { cube(a); }"]), ("B", ["B = 1;"])],
+        )
+
+    def test_signature_with_open_body_at_eof(self):
+        src = "module m(\n  a\n) {\n  cube(a);"
+        self.assertEqual(_parse_definitions(src)[0].lines, ["module m(", "  a", ") {", "  cube(a);"])
+
+
+class ExtractMainCodeTests(unittest.TestCase):
+    """Unit tests for the _extract_main_code leading-assignment skipper."""
+
+    def test_skips_multiline_assignment_with_semicolon_in_string(self):
+        # A ';' in a string must not end the assignment early (leaking '"c");').
+        content = 'MSG =\n  str("a; b",\n  "c");\ncube(1);\n'
+        self.assertEqual(_extract_main_code(content), "cube(1);")
+
+
+class ResolveDependenciesTests(unittest.TestCase):
+    """Unit tests for the _resolve_dependencies helper."""
+
+    def test_includes_direct_dependency(self):
+        defs = [
+            _Definition("variable", "A", ["A = 1;"]),
+            _Definition("variable", "B", ["B = 2;"]),
+        ]
+        result = _resolve_dependencies({"A"}, defs)
+        names = [d.name for d in result]
+        self.assertIn("A", names)
+        self.assertNotIn("B", names)
+
+    def test_includes_transitive_dependency(self):
+        defs = [
+            _Definition("variable", "BASE", ["BASE = 10;"]),
+            _Definition("variable", "DERIVED", ["DERIVED = BASE + 1;"]),
+        ]
+        result = _resolve_dependencies({"DERIVED"}, defs)
+        names = [d.name for d in result]
+        self.assertIn("BASE", names)
+        self.assertIn("DERIVED", names)
+
+    def test_excludes_unused(self):
+        defs = [
+            _Definition("variable", "USED", ["USED = 1;"]),
+            _Definition("variable", "UNUSED", ["UNUSED = 2;"]),
+            _Definition("module", "needed", ["module needed() { cube(USED); }"]),
+        ]
+        result = _resolve_dependencies({"needed"}, defs)
+        names = [d.name for d in result]
+        self.assertIn("needed", names)
+        self.assertIn("USED", names)
+        self.assertNotIn("UNUSED", names)
+
+    def test_module_calling_module(self):
+        defs = [
+            _Definition("module", "inner", ["module inner() { cube(1); }"]),
+            _Definition("module", "outer", ["module outer() { inner(); }"]),
+        ]
+        result = _resolve_dependencies({"outer"}, defs)
+        names = [d.name for d in result]
+        self.assertIn("inner", names)
+        self.assertIn("outer", names)
+
+
+class FindUsedNamesTests(unittest.TestCase):
+    """Unit tests for _find_used_names (comment/string stripping)."""
+
+    def test_ignores_names_in_line_comments(self):
+        names = _find_used_names("cube(1); // call foo() here")
+        self.assertIn("cube", names)
+        self.assertNotIn("foo", names)
+
+    def test_ignores_names_in_block_comments(self):
+        names = _find_used_names("sphere(2); /* Example: bar() */")
+        self.assertIn("sphere", names)
+        self.assertNotIn("bar", names)
+
+    def test_ignores_names_in_string_literals(self):
+        names = _find_used_names('echo("call baz()");')
+        self.assertIn("echo", names)
+        self.assertNotIn("baz", names)
+
+    def test_finds_dollar_variables(self):
+        names = _find_used_names("sphere($fn);")
+        self.assertIn("$fn", names)
+
+    def test_comment_only_reference_excluded_in_flatten(self):
+        """A name mentioned only in a comment must NOT pull in that definition."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "stuff.scad").write_text(
+                "COMMENT_ONLY = 99;\nUSED_VAL = 1;\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/stuff.scad>",
+                        "",
+                        "// Example: echo(COMMENT_ONLY);",
+                        "cube(USED_VAL);",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("USED_VAL", out)
+            self.assertNotIn("COMMENT_ONLY", out)
+
+
+class FlattenTests(unittest.TestCase):
+    def test_inlines_scadm_library_before_hidden_assignments(self):
+        """Library include resolved via scadm.json is inlined BEFORE the root
+        file's [Hidden] assignments, so root code can reference library constants
+        (e.g. PANEL_PRIMARY_COLOR = HR_YELLOW where HR_YELLOW comes from the library).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            (root / "bin" / "openscad" / "libraries" / "homeracker" / "models" / "core" / "lib").mkdir(parents=True)
+
+            (root / "scadm.json").write_text(
+                '{"dependencies": [{"name": "BOSL2"}, {"name": "homeracker"}]}\n',
+                encoding="utf-8",
+            )
+
+            constants = (
+                root / "bin" / "openscad" / "libraries" / "homeracker" / "models" / "core" / "lib" / "constants.scad"
+            )
+            constants.write_text("HR_YELLOW = [1,1,0];\n", encoding="utf-8")
+
+            src_dir = root / "src"
+            src_dir.mkdir()
+            input_file = src_dir / "panel.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <BOSL2/std.scad>",
+                        "include <homeracker/models/core/lib/constants.scad>",
+                        "",
+                        "/* [General] */",
+                        "variant = 1;",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn=100;",
+                        "EPSILON = 0.01;",
+                        "PANEL_PRIMARY_COLOR = HR_YELLOW;",
+                        "",
+                        "module main() { }",
+                        "main();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            output_file = root / "out" / "panel.scad"
+            flatten_file(input_file, output_file, workspace_root=root)
+
+            out = output_file.read_text(encoding="utf-8")
+            self.assertIn("include <BOSL2/std.scad>", out)
+            self.assertIn("$fn=100;", out)
+            self.assertEqual(out.count("$fn=100;"), 1)
+            self.assertIn("EPSILON = 0.01;", out)
+            # Library constants emitted before root Hidden assignments
+            self.assertLess(out.find("HR_YELLOW"), out.find("PANEL_PRIMARY_COLOR"))
+
+    def test_preserves_keyword_arg_lines_in_multiline_calls(self):
+        """Lines like `view_mode=1);` inside module bodies look like assignments
+        but are actually keyword arguments in multi-line function calls.
+        They must NOT be stripped by the leading-assignment skipper.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            (root / "bin" / "openscad" / "libraries").mkdir(parents=True)
+            (root / "scadm.json").write_text('{"dependencies": []}\n', encoding="utf-8")
+
+            src_dir = root / "src"
+            src_dir.mkdir()
+            input_file = src_dir / "unimount.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "/* [General] */",
+                        "variant = 1;",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn=100;",
+                        "EPSILON = 0.01;",
+                        "",
+                        "module mw_assembly_view() {",
+                        "  bracket_color = true ? 1 : 2;",
+                        "  frontpanel(variant,",
+                        "    view_mode=1);",
+                        "}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            output_file = root / "out" / "unimount.scad"
+            flatten_file(input_file, output_file, workspace_root=root)
+            out = output_file.read_text(encoding="utf-8")
+
+            self.assertEqual(out.count("$fn=100;"), 1)
+            self.assertIn("view_mode=1);", out)
+            self.assertIn("bracket_color = true ? 1 : 2;", out)
+
+    def test_inlines_relative_include(self):
+        """A relative include like `include <lib/helper.scad>` is resolved
+        relative to the input file and its content is inlined into the output.
+        The original include directive is removed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            (root / "bin" / "openscad" / "libraries").mkdir(parents=True)
+            (root / "scadm.json").write_text('{"dependencies": []}\n', encoding="utf-8")
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "helper.scad").write_text("function helper_fn() = 42;\n", encoding="utf-8")
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/helper.scad>",
+                        "",
+                        "/* [General] */",
+                        "size = 10;",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn=50;",
+                        "",
+                        "cube(helper_fn());",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            output_file = root / "out" / "main.scad"
+            flatten_file(input_file, output_file, workspace_root=root)
+            out = output_file.read_text(encoding="utf-8")
+
+            self.assertIn("helper_fn", out)
+            self.assertNotIn("include <lib/helper.scad>", out)
+
+    def test_output_ends_with_single_newline(self):
+        """Output must end with exactly one newline (POSIX convention).
+        No trailing blank lines.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            (root / "bin" / "openscad" / "libraries").mkdir(parents=True)
+            (root / "scadm.json").write_text('{"dependencies": []}\n', encoding="utf-8")
+
+            src_dir = root / "src"
+            src_dir.mkdir()
+            input_file = src_dir / "simple.scad"
+            input_file.write_text("cube(1);\n", encoding="utf-8")
+
+            output_file = root / "out" / "simple.scad"
+            flatten_file(input_file, output_file, workspace_root=root)
+            out = output_file.read_text(encoding="utf-8")
+
+            self.assertTrue(out.endswith("\n"))
+            self.assertFalse(out.endswith("\n\n"))
+
+    def test_checksum_independent_of_flatten_py_location(self):
+        """compute_checksum hashes flatten.py at a fixed position, so its
+        install location never affects the digest — even when library deps
+        in bin/openscad/libraries/ would sort between possible flatten.py
+        positions.
+        """
+        with tempfile.TemporaryDirectory() as tmp_workspace, tempfile.TemporaryDirectory() as tmp_site:
+            root = Path(tmp_workspace)
+
+            # Set up a scadm dependency so bin/openscad/libraries/ files
+            # are included in the transitive dep tree.
+            lib_dir = root / "bin" / "openscad" / "libraries" / "mylib" / "lib"
+            lib_dir.mkdir(parents=True)
+            (lib_dir / "helper.scad").write_text("function h() = 1;\n", encoding="utf-8")
+
+            (root / "scadm.json").write_text(
+                '{"dependencies": [{"name": "mylib"}]}\n',
+                encoding="utf-8",
+            )
+
+            src_dir = root / "src"
+            src_dir.mkdir()
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "include <mylib/lib/helper.scad>\ncube(1);\n",
+                encoding="utf-8",
+            )
+
+            checksum = compute_checksum(input_file, workspace_root=root)
+
+            # Place flatten.py completely outside the workspace tree.
+            alt_dir = Path(tmp_site) / "alt_site_packages" / "scadm"
+            alt_dir.mkdir(parents=True)
+            alt_flatten = alt_dir / "flatten.py"
+            shutil.copy2(flatten_mod.__file__, alt_flatten)
+
+            with patch.object(flatten_mod, "__file__", str(alt_flatten)):
+                checksum_alt = compute_checksum(input_file, workspace_root=root)
+
+            self.assertEqual(checksum, checksum_alt)
+
+    # --- New resilience tests ---
+
+    def test_lib_with_section_markers_no_error(self):
+        """Library files with section markers must NOT raise ValueError.
+        The markers should be silently ignored.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            # Library with section markers (previously caused ValueError)
+            (lib_dir / "marked.scad").write_text(
+                "\n".join(
+                    [
+                        "/* [Constants] */",
+                        "MAGIC = 42;",
+                        "",
+                        "/* [Hidden] */",
+                        "SECRET = 7;",
+                        "",
+                        "module magic_cube() { cube(MAGIC); }",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/marked.scad>",
+                        "",
+                        "/* [General] */",
+                        "size = 10;",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn=100;",
+                        "",
+                        "magic_cube();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            # Should NOT raise
+            out = _flatten(root, input_file)
+            self.assertIn("magic_cube", out)
+            self.assertIn("MAGIC", out)
+
+    def test_only_used_variables_included(self):
+        """Only variables that are transitively used should appear in output."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "constants.scad").write_text(
+                "\n".join(
+                    [
+                        "USED_VAR = 42;",
+                        "UNUSED_VAR = 99;",
+                        "CHAIN_A = 1;",
+                        "CHAIN_B = CHAIN_A + 1;",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/constants.scad>",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn=100;",
+                        "",
+                        "cube(USED_VAR);",
+                        "echo(CHAIN_B);",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("USED_VAR", out)
+            self.assertNotIn("UNUSED_VAR", out)
+            # Transitive: CHAIN_B uses CHAIN_A
+            self.assertIn("CHAIN_B", out)
+            self.assertIn("CHAIN_A", out)
+
+    def test_only_used_modules_included(self):
+        """Unused modules from libraries should be omitted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "shapes.scad").write_text(
+                "\n".join(
+                    [
+                        "module used_shape() { cube(1); }",
+                        "module unused_shape() { sphere(1); }",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/shapes.scad>",
+                        "",
+                        "used_shape();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("used_shape", out)
+            self.assertNotIn("unused_shape", out)
+
+    def test_transitive_module_dependency(self):
+        """Modules calling other modules must pull in the entire chain."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "base.scad").write_text(
+                "BASE_SIZE = 10;\nmodule base_block() { cube(BASE_SIZE); }\n",
+                encoding="utf-8",
+            )
+
+            (lib_dir / "composite.scad").write_text(
+                "\n".join(
+                    [
+                        "include <base.scad>",
+                        "module composite() { base_block(); }",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/composite.scad>",
+                        "",
+                        "composite();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("composite", out)
+            self.assertIn("base_block", out)
+            self.assertIn("BASE_SIZE", out)
+
+    def test_sections_only_from_root_file(self):
+        """Section markers from lib files must NOT appear in output.
+        Only root file sections should be preserved.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "lib_with_sections.scad").write_text(
+                "\n".join(
+                    [
+                        "/* [LibSection] */",
+                        "LIB_CONST = 5;",
+                        "module lib_mod() { cube(LIB_CONST); }",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/lib_with_sections.scad>",
+                        "",
+                        "/* [RootSection] */",
+                        "root_param = 10;",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn=100;",
+                        "",
+                        "lib_mod();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            # Root section preserved
+            self.assertIn("/* [RootSection] */", out)
+            # Library section marker NOT in output
+            self.assertNotIn("/* [LibSection] */", out)
+            # But library content IS present
+            self.assertIn("LIB_CONST", out)
+            self.assertIn("lib_mod", out)
+
+    def test_variables_scattered_in_root_file(self):
+        """Variables in root file outside sections go to hidden section.
+        Variables inside named sections stay in those sections.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            src_dir.mkdir()
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "/* [General] */",
+                        "width = 10;",
+                        "",
+                        "/* [Debug Parameters] */",
+                        "debug = false;",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn = 100;",
+                        "EPSILON = 0.01;",
+                        "",
+                        "module main_mod() { cube(width); }",
+                        "main_mod();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            # Section params stay in sections
+            self.assertIn("/* [General] */", out)
+            self.assertIn("width = 10;", out)
+            self.assertIn("/* [Debug Parameters] */", out)
+            self.assertIn("debug = false;", out)
+            # Hidden vars preserved
+            self.assertIn("$fn = 100;", out)
+            self.assertIn("EPSILON = 0.01;", out)
+            # Module and call preserved
+            self.assertIn("main_mod", out)
+
+    def test_lib_variables_get_origin_comment(self):
+        """Variables from library files should have origin comments."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "myconst.scad").write_text("MY_CONST = 42;\n", encoding="utf-8")
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/myconst.scad>",
+                        "",
+                        "/* [Hidden] */",
+                        "$fn=100;",
+                        "",
+                        "cube(MY_CONST);",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("MY_CONST = 42;", out)
+            self.assertIn("// --- from myconst.scad ---", out)
+
+    def test_multiline_variable_in_lib(self):
+        """Multiline variable assignments in libraries are handled correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "multi.scad").write_text(
+                "CONFIGS = [\n  [1, 2],\n  [3, 4]\n];\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/multi.scad>",
+                        "echo(CONFIGS);",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("CONFIGS", out)
+            self.assertIn("[1, 2]", out)
+            self.assertIn("[3, 4]", out)
+
+    def test_function_in_lib_included_when_used(self):
+        """Functions from libraries should be included when called."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "funcs.scad").write_text(
+                "\n".join(
+                    [
+                        "function used_fn(x) = x * 2;",
+                        "function unused_fn(x) = x + 1;",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/funcs.scad>",
+                        "echo(used_fn(5));",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("used_fn", out)
+            self.assertNotIn("unused_fn", out)
+
+    def test_dollar_variable_in_lib(self):
+        """$-prefixed variables from libraries are handled correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "special.scad").write_text(
+                "$custom_var = 50;\nmodule special() { cube($custom_var); }\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/special.scad>",
+                        "special();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("special", out)
+
+    def test_nested_module_definitions(self):
+        """Modules containing nested module definitions are handled correctly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "nested.scad").write_text(
+                "\n".join(
+                    [
+                        "module outer() {",
+                        "  module inner() {",
+                        "    cube(1);",
+                        "  }",
+                        "  inner();",
+                        "}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/nested.scad>",
+                        "outer();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("module outer()", out)
+            self.assertIn("module inner()", out)
+            self.assertIn("outer();", out)
+
+    def test_deep_include_chain(self):
+        """Three-level include chain: root -> lib_a -> lib_b -> lib_c."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "c.scad").write_text("C_VAL = 1;\n", encoding="utf-8")
+            (lib_dir / "b.scad").write_text(
+                "include <c.scad>\nB_VAL = C_VAL + 1;\n",
+                encoding="utf-8",
+            )
+            (lib_dir / "a.scad").write_text(
+                "include <b.scad>\nmodule use_chain() { cube(B_VAL); }\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "include <lib/a.scad>\nuse_chain();\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("C_VAL", out)
+            self.assertIn("B_VAL", out)
+            self.assertIn("use_chain", out)
+
+    def test_lib_vars_before_root_hidden(self):
+        """Library variables must appear before root hidden section
+        so root hidden can reference library constants.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "colors.scad").write_text(
+                'HR_YELLOW = "#f7b600";\n',
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/colors.scad>",
+                        "",
+                        "/* [Hidden] */",
+                        "PRIMARY_COLOR = HR_YELLOW;",
+                        "",
+                        "module m() { echo(PRIMARY_COLOR); }",
+                        "m();",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            # HR_YELLOW from lib must come before PRIMARY_COLOR from root hidden
+            self.assertLess(out.find("HR_YELLOW"), out.find("PRIMARY_COLOR"))
+
+    def test_unused_include_file_content_omitted(self):
+        """If an included file's definitions are not used, its content is omitted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "unused_lib.scad").write_text(
+                "UNUSED_CONST = 999;\nmodule unused_mod() { cube(1); }\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/unused_lib.scad>",
+                        "",
+                        "cube(1);",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertNotIn("UNUSED_CONST", out)
+            self.assertNotIn("unused_mod", out)
+
+    def test_dollar_variable_only_usage_from_lib(self):
+        """A $-variable as the only usage from a lib must still be included."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_workspace(root)
+
+            src_dir = root / "src"
+            lib_dir = src_dir / "lib"
+            lib_dir.mkdir(parents=True)
+
+            (lib_dir / "defaults.scad").write_text(
+                "$my_resolution = 64;\nUNUSED = 999;\n",
+                encoding="utf-8",
+            )
+
+            input_file = src_dir / "main.scad"
+            input_file.write_text(
+                "\n".join(
+                    [
+                        "include <lib/defaults.scad>",
+                        "",
+                        "sphere($my_resolution);",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            out = _flatten(root, input_file)
+            self.assertIn("$my_resolution", out)
+            self.assertNotIn("UNUSED", out)
+
+
+class StripCommentsTests(unittest.TestCase):
+    def test_removes_comments_but_keeps_section_markers(self):
+        src = "a = 1; // trailing\n/* [Size] */\n/* block\n   comment */b = 2;\n/* [Hidden] */ // note\nc = 3;"
+        self.assertEqual(_strip_comments(src), "a = 1; \n/* [Size] */\nb = 2;\n/* [Hidden] */ \nc = 3;")
+
+
+class ExtractHiddenSectionTests(unittest.TestCase):
+    def test_keeps_assignments_until_first_statement(self):
+        src = (
+            "/* [Size] */\n"
+            "w = 1;\n"
+            "/* [Hidden] */\n"
+            "$fn = 64;\n"
+            "\n"
+            "// spacing\n"
+            "BASE =\n"
+            "  15;\n"
+            "EPS = 0.01;\n"
+            "cube(BASE);\n"
+            "LATE = 1;\n"
+        )
+        self.assertEqual(
+            _extract_hidden_section(src),
+            "/* [Hidden] */\n$fn = 64;\n\n// spacing\nBASE =\n  15;\nEPS = 0.01;",
+        )
+
+    def test_stops_at_definitions_and_includes(self):
+        for stop in ("include <x.scad>", "use <x.scad>", "module m() {}", "function f() = 1;"):
+            with self.subTest(stop=stop):
+                self.assertEqual(
+                    _extract_hidden_section(f"/* [Hidden] */\nA = 1;\n{stop}\nB = 2;"), "/* [Hidden] */\nA = 1;"
+                )
+
+    def test_statement_right_after_marker(self):
+        self.assertEqual(_extract_hidden_section("/* [Hidden] */\ncube(1);\nA = 1;"), "/* [Hidden] */")
+
+    def test_no_hidden_section(self):
+        self.assertEqual(_extract_hidden_section("A = 1;\n"), "")
+
+
+class FlattenOutputTests(unittest.TestCase):
+    """Pins the exact flattened output, since that file is what gets published."""
+
+    def test_exact_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            _make_workspace(root, deps='{"dependencies": [{"name": "hrlib"}]}')
+            core = root / "bin" / "openscad" / "libraries" / "hrlib" / "core.scad"
+            core.parent.mkdir()
+            core.write_text(
+                "BASE = 15;\nUNUSED = 1;\nmodule block(n) {\n  cube(BASE * n);   \n}\nmodule unused() {}\n",
+                encoding="utf-8",
+            )
+            (root / "lib").mkdir()
+            (root / "lib" / "helpers.scad").write_text(
+                "include <hrlib/core.scad>\nSCALE = 2;\nfunction twice(x) = x * SCALE;\n", encoding="utf-8"
+            )
+            main = root / "main.scad"
+            main.write_text(
+                "include <BOSL2/std.scad>\ninclude <lib/helpers.scad>\n\n/* [Size] */\n// Units\nunits = 2;\n\n"
+                "/* [Hidden] */\n$fn = 64;\n\n\n\nblock(twice(units));\n",
+                encoding="utf-8",
+            )
+            out = root / "out" / "nested" / "main.scad"
+            out.parent.parent.mkdir()
+            (out.parent).mkdir()
+
+            flatten_file(main, out)
+
+            self.assertEqual(
+                out.read_bytes().decode("utf-8"),
+                "include <BOSL2/std.scad>\n"
+                "\n"
+                "/* [Size] */\n"
+                "// Units\n"
+                "units = 2;\n"
+                "\n"
+                "/* [Hidden] */\n"
+                "// --- from core.scad ---\n"
+                "BASE = 15;\n"
+                "// --- from helpers.scad ---\n"
+                "SCALE = 2;\n"
+                "$fn = 64;\n"
+                "module block(n) {\n"
+                "  cube(BASE * n);\n"
+                "}\n"
+                "function twice(x) = x * SCALE;\n"
+                "\n"
+                "block(twice(units));\n",
+            )
+
+    def test_creates_missing_output_dirs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            _make_workspace(root)
+            (root / "m.scad").write_text("cube(1);\n", encoding="utf-8")
+            out = root / "a" / "b" / "m.scad"
+            flatten_file(root / "m.scad", out, root)
+            self.assertTrue(out.exists())
+
+
+class ComputeChecksumDependencyTests(unittest.TestCase):
+    """compute_checksum covers every transitive local include, and only those."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name).resolve()
+        _make_workspace(self.root, deps='{"dependencies": [{"name": "hrlib"}]}')
+        libs = self.root / "bin" / "openscad" / "libraries"
+        (libs / "BOSL2").mkdir()
+        (libs / "BOSL2" / "std.scad").write_text("// bosl\n", encoding="utf-8")
+        (libs / "hrlib").mkdir()
+        (libs / "hrlib" / "core.scad").write_text("module core() {}\n", encoding="utf-8")
+        self.files = {
+            "main.scad": "include <BOSL2/std.scad>\ninclude <lib/b.scad>\ncube(1);\n",
+            "lib/b.scad": "use <c.scad>\ninclude <missing.scad>\n",
+            "lib/c.scad": "include <../main.scad>\ninclude <hrlib/core.scad>\n",
+            "unrelated.scad": "sphere(1);\n",
+        }
+        for rel, text in self.files.items():
+            path = self.root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        self.main = self.root / "main.scad"
+
+    def _changed_after(self, rel):
+        before = compute_checksum(self.main, self.root)
+        path = self.root / rel
+        path.write_text(path.read_text(encoding="utf-8") + "// edit\n", encoding="utf-8")
+        return compute_checksum(self.main, self.root) != before
+
+    def test_transitive_local_includes_count(self):
+        self.assertTrue(self._changed_after("lib/c.scad"))
+
+    def test_scadm_library_reached_through_nested_include_counts(self):
+        self.assertTrue(self._changed_after("bin/openscad/libraries/hrlib/core.scad"))
+
+    def test_unrelated_file_and_bosl2_do_not_count(self):
+        self.assertFalse(self._changed_after("unrelated.scad"))
+        self.assertFalse(self._changed_after("bin/openscad/libraries/BOSL2/std.scad"))
+
+    def test_auto_detects_workspace(self):
+        self.assertEqual(compute_checksum(self.main), compute_checksum(self.main, self.root))
+
+
+class FlattenAllTests(unittest.TestCase):
+    """Tests for flatten_all batch mode and checksum caching."""
+
+    CONFIG = '{"dependencies": [], "flatten": [{"src": "models/x", "dest": "models/x/flattened"}]}'
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name).resolve()
+        _make_workspace(self.root, deps=self.CONFIG)
+        self.src = self.root / "models" / "x"
+        self.src.mkdir(parents=True)
+        (self.src / "a.scad").write_text("cube(1);\n", encoding="utf-8")
+        (self.src / "parts").mkdir()
+        (self.src / "parts" / "b.scad").write_text("sphere(1);\n", encoding="utf-8")
+        self.checksums = self.root / "models" / ".flatten-checksums"
+
+    def test_flattens_all_and_writes_sorted_checksums(self):
+        self.assertTrue(flatten_all(self.root))
+        dest = self.src / "flattened"
+        self.assertIn("cube(1);", (dest / "a.scad").read_text(encoding="utf-8"))
+        self.assertIn("sphere(1);", (dest / "parts" / "b.scad").read_text(encoding="utf-8"))
+        lines = self.checksums.read_text(encoding="utf-8").splitlines()
+        self.assertEqual([line.split()[1] for line in lines], ["models/x/a.scad", "models/x/parts/b.scad"])
+        self.assertEqual(lines[0].split()[0], compute_checksum(self.src / "a.scad", self.root))
+
+    def test_second_run_skips_unchanged(self):
+        self.assertTrue(flatten_all(self.root))
+        (self.src / "a.scad").write_text("cube(2);\n", encoding="utf-8")
+        with patch("scadm.flatten.flatten_file") as mock_flatten:
+            self.assertTrue(flatten_all(self.root))
+        mock_flatten.assert_called_once()
+        self.assertEqual(mock_flatten.call_args.args[0], self.src / "a.scad")
+
+    def test_skips_files_already_in_dest(self):
+        self.assertTrue(flatten_all(self.root))
+        with patch("scadm.flatten.flatten_file") as mock_flatten:
+            self.checksums.unlink()
+            self.assertTrue(flatten_all(self.root))
+        flattened_inputs = {call.args[0].name for call in mock_flatten.call_args_list}
+        self.assertEqual(flattened_inputs, {"a.scad", "b.scad"})
+
+    def test_checksums_sorted_by_path_not_digest(self):
+        digests = {"a.scad": "ffff", "b.scad": "0000"}
+        with patch("scadm.flatten.compute_checksum", side_effect=lambda f, _: digests[f.name]):
+            self.assertTrue(flatten_all(self.root))
+        self.assertEqual(
+            self.checksums.read_text(encoding="utf-8"),
+            "ffff  models/x/a.scad\n0000  models/x/parts/b.scad\n",
+        )
+
+    def test_paths_with_spaces_round_trip(self):
+        (self.src / "my part.scad").write_text("cube(3);\n", encoding="utf-8")
+        self.assertTrue(flatten_all(self.root))
+        with patch("scadm.flatten.flatten_file") as mock_flatten:
+            self.assertTrue(flatten_all(self.root))
+        mock_flatten.assert_not_called()
+        self.assertIn("  models/x/my part.scad\n", self.checksums.read_text(encoding="utf-8"))
+
+    def test_unchanged_file_does_not_stop_later_files(self):
+        self.assertTrue(flatten_all(self.root))
+        (self.src / "parts" / "b.scad").write_text("sphere(2);\n", encoding="utf-8")
+        with patch("scadm.flatten.flatten_file") as mock_flatten:
+            self.assertTrue(flatten_all(self.root))
+        mock_flatten.assert_called_once_with(
+            self.src / "parts" / "b.scad", self.src / "flattened" / "parts" / "b.scad", self.root
+        )
+
+    def test_checksums_file_in_new_directory(self):
+        custom = self.root / "cache" / "deep" / "sums.txt"
+        self.assertTrue(flatten_all(self.root, checksums_file=custom))
+        self.assertTrue(custom.exists())
+
+    def test_custom_checksums_file_and_malformed_lines(self):
+        custom = self.root / "sums.txt"
+        custom.write_text("garbage\n", encoding="utf-8")
+        self.assertTrue(flatten_all(self.root, checksums_file=custom))
+        self.assertEqual(len(custom.read_text(encoding="utf-8").splitlines()), 2)
+
+    def test_failure_is_reported_and_not_cached(self):
+        with patch("scadm.flatten.flatten_file", side_effect=[ValueError("bad"), None]):
+            self.assertFalse(flatten_all(self.root))
+        self.assertEqual(self.checksums.read_text(encoding="utf-8").split()[1:], ["models/x/parts/b.scad"])
+
+    def test_missing_src_dir(self):
+        shutil.rmtree(self.src)
+        self.assertFalse(flatten_all(self.root))
+
+    def test_no_scad_files(self):
+        for scad in self.src.rglob("*.scad"):
+            scad.unlink()
+        self.assertFalse(flatten_all(self.root))
+
+    def test_auto_detects_workspace(self):
+        with patch("scadm.flatten.get_workspace_root", return_value=self.root):
+            self.assertTrue(flatten_all())
+
+
+if __name__ == "__main__":
+    unittest.main()

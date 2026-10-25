@@ -1,0 +1,55 @@
+*.3mf
+*.stl
+.vscode
+bin/openscad/
+bin/openscad-nightly/
+renovate_cache/
+renovate_base/
+.venv/
+
+# Flatten checksums (cached in CI, not tracked)
+models/.flatten-checksums
+
+# Generated MakerWorld HTML (from md-to-mw.py)
+DESCRIPTION.html
+
+# Self-test render logs
+_test*.log
+_visual_test
+
+# Images — hosted in kellerlabs/assets repo
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+*.ico
+*.xcf
+
+# Whitelist: auto-generated render previews + favicon
+!**/renders/*.png
+!favicon.ico
+
+# Python
+__pycache__/
+*.py[cod]
+cmd/scadm/dist/
+cmd/*/*.egg-info/
+
+# Web configurator / site
+node_modules/
+.astro/
+configurator/dist/
+site/dist/
+site/public/parts/
+site/test-results/
+site/playwright-report/
+site/e2e-results/
+_site/
+
+# Coverage / mutation testing artifacts
+htmlcov/
+.coverage
+cmd/scadm/mutants/
+cmd/scadfmt/mutants/

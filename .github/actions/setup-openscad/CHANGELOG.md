@@ -1,0 +1,80 @@
+# Changelog
+
+## [2.2.3](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v2.2.2...setup-openscad-v2.2.3) (2026-10-18)
+
+
+### 📦 Dependencies
+
+* update github actions ([#553](https://github.com/kellerlabs/homeracker/issues/553)) ([63ac4fa](https://github.com/kellerlabs/homeracker/commit/63ac4fa7dedf563c6085e5f4e4c6cdaf7a75970e))
+
+## [2.2.2](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v2.2.1...setup-openscad-v2.2.2) (2026-09-27)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** pass action inputs via env and enforce zizmor template-injection ([#510](https://github.com/kellerlabs/homeracker/issues/510)) ([74e77b1](https://github.com/kellerlabs/homeracker/commit/74e77b1e9474b3bb67c7fc0fdd77b05a5aec6229))
+
+## [2.2.1](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v2.2.0...setup-openscad-v2.2.1) (2026-09-14)
+
+
+### ♻️ Code Refactoring
+
+* **instructions:** make AGENTS.md canonical and align docs with house-style ([#484](https://github.com/kellerlabs/homeracker/issues/484)) ([ef337d5](https://github.com/kellerlabs/homeracker/commit/ef337d57ba903edb2602e5dc6b36c18c2fe36a8d))
+
+## [2.2.0](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v2.1.2...setup-openscad-v2.2.0) (2026-09-05)
+
+
+### ✨ Features
+
+* **ci:** pin every action to a commit SHA and enforce it with zizmor ([#475](https://github.com/kellerlabs/homeracker/issues/475)) ([569b564](https://github.com/kellerlabs/homeracker/commit/569b564762600cf9321bf3b33f32d614d3d1b03b))
+
+## [2.1.2](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v2.1.1...setup-openscad-v2.1.2) (2026-07-25)
+
+
+### 📦 Dependencies
+
+* update actions/setup-python action to v7 ([#436](https://github.com/kellerlabs/homeracker/issues/436)) ([6a818af](https://github.com/kellerlabs/homeracker/commit/6a818afca77ba8678523bf30a4c3cbb71bea729b))
+
+## [2.1.1](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v2.1.0...setup-openscad-v2.1.1) (2026-06-27)
+
+
+### 📦 Dependencies
+
+* update actions/cache action to v6 ([#418](https://github.com/kellerlabs/homeracker/issues/418)) ([a01974f](https://github.com/kellerlabs/homeracker/commit/a01974f0556d6eec0d9c0da6a829f43dbf40bd2f))
+
+## [2.1.0](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v2.0.0...setup-openscad-v2.1.0) (2026-04-18)
+
+
+### ✨ Features
+
+* **scadm:** dynamic OpenSCAD version resolution ([#311](https://github.com/kellerlabs/homeracker/issues/311)) ([026c5d8](https://github.com/kellerlabs/homeracker/commit/026c5d85cfbaa599ff6ffc838017f1eb3c8b9942))
+
+## [2.0.0](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v1.1.0...setup-openscad-v2.0.0) (2026-04-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **setup-openscad:** add scadm-requirements input, remove default version ([#329](https://github.com/kellerlabs/homeracker/issues/329))
+
+### ✨ Features
+
+* **setup-openscad:** add scadm-requirements input, remove default version ([#329](https://github.com/kellerlabs/homeracker/issues/329)) ([85fa9f8](https://github.com/kellerlabs/homeracker/commit/85fa9f8c289be47bfa0d56ec9590606aa8d8fa83))
+
+## [1.1.0](https://github.com/kellerlabs/homeracker/compare/setup-openscad-v1.0.0...setup-openscad-v1.1.0) (2026-03-20)
+
+
+### ✨ Features
+
+* **scadm:** add flatten and render subcommands ([#283](https://github.com/kellerlabs/homeracker/issues/283)) ([9816c3c](https://github.com/kellerlabs/homeracker/commit/9816c3ccebf0c0a012376dc4158a6c2dcfd70bd3))
+
+## 1.0.0 (2026-03-15)
+
+
+### ✨ Features
+
+* **setup-openscad:** make action reusable across repositories ([#273](https://github.com/kellerlabs/homeracker/issues/273)) ([055e784](https://github.com/kellerlabs/homeracker/commit/055e78444f59d351e8a943ab7c8ae04d8c34f259))
+
+
+### 🔄 CI/CD
+
+* cache CI environments & add PR template ([#269](https://github.com/kellerlabs/homeracker/issues/269)) ([ca78385](https://github.com/kellerlabs/homeracker/commit/ca783858fbc69842d064dbb92e608504b11784fc))

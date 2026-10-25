@@ -1,0 +1,134 @@
+# 📦 Models
+
+This folder contains all `scad` 3D models which come with the HomeRacker project.
+
+## 📑 Contents
+
+### 🧱 Core
+
+The fundamental HomeRacker building system with modular components:
+
+- **Supports**: Vertical and horizontal structural elements
+- **Connectors**: Join supports in a variety of dimensions
+- **Lock Pins**: Secure connections without tools
+
+![Connector](./core/parts/renders/connector.png)
+
+See [core/README.md](core/README.md) for details.
+
+### 📐 Gridfinity
+
+Gridfinity-compatible components for modular storage integration:
+
+- **Baseplates**: Mounting surfaces for Gridfinity bins (42mm grid)
+- **Bin Bases**: Foundation for custom Gridfinity-compatible containers
+
+![Baseplate](./gridfinity/parts/renders/baseplate.png)
+
+See [gridfinity/README.md](gridfinity/README.md) for details.
+
+### 🔩 Rackmount Ears
+
+Fully customizable rackmount ears for standard 10" and 19" rack mounting.
+
+![Rackmount Ears](./rackmount_ears/parts/renders/rackmount_ears.png)
+
+See [rackmount_ears/README.md](rackmount_ears/README.md) for details.
+
+### 🧲 Wall Mount
+
+Wall-mountable bracket for attaching HomeRacker supports to vertical surfaces.
+
+![Wall Mount](./wallmount/parts/renders/wallmount.png)
+
+See [wallmount/README.md](wallmount/README.md) for details.
+
+### 🔗 Racklink
+
+Connects independent rack columns together via double U-shaped sleeves for better stability and a clean look. Build small columns, join them later.
+
+![Racklink](./racklink/parts/renders/racklink.png)
+
+See [racklink/README.md](racklink/README.md) for details.
+
+### 🖼️ Panel
+
+Plain mounting panel that fits into the HomeRacker scaffold. Use as-is for blank panels or as a base for custom cutouts (keystone jacks, switches, etc.). Supports Inter-Fit (inset) and Full Cover (overlap) integration types. Includes a standard 10"/19" rack panel variant with configurable bore patterns, an optional back-side truss stiffener, and an optional split mode (hinge connector + lock pin) for printing wide panels in halves.
+
+![Panel](./panel/parts/renders/panel.png)
+
+See [panel/README.md](panel/README.md) for details.
+
+### 🔌 Keystone
+
+Parametric keystone jack socket module for integrating standard keystone connectors into virtually any panels (using BOSL2 `diff("keystone")`). Supports 4 rotation angles and includes snap-fit label plate slots for port identification, mountable above or below the jack.
+
+![Keystone Sample](./keystone/parts/renders/keystone_sample.png)
+
+See [keystone/README.md](keystone/README.md) for details.
+
+### 🦶 Foot
+
+Modular foot insert that plugs into any connector arm used as contact surface at the bottom of a rack. Decoupled from the connector for maximum flexibility, print in TPU for better grip and load distribution.
+
+![Foot](./foot/parts/renders/foot.png)
+
+See [foot/README.md](foot/README.md) for details.
+
+### 🗜️ Bracket
+
+Clamp that wraps a device from above/below and hangs it in the frame via lock pins. Mount wings on both flanks absorb whatever the device width misses on the 15mm grid, so the lock pins always land on the right position on a support. Nothing sits below/above the device, keeping airflow and cabling clear.
+
+![Bracket](./bracket/parts/renders/bracket.png)
+
+See [bracket/README.md](bracket/README.md) for details.
+
+### 🧤 Sleeve
+
+A 3-sided U-shaped sleeve that wraps around a vertical HomeRacker support. Reusable attachment primitive with lock pin holes on both sides.
+
+![Sleeve](./sleeve/parts/renders/sleeve.png)
+
+See [sleeve/README.md](sleeve/README.md) for details.
+
+### 📌 Pinpusher
+
+A utility tool for removing lock pins from connectors.
+
+![Pinpusher](./pinpusher/parts/renders/pinpusher.png)
+
+See [pinpusher/README.md](pinpusher/README.md) for details.
+
+### 🔄 Inception
+
+Meta models for organizing HomeRacker parts within the HomeRacker ecosystem, Gridfinity bins and frame-mounted grids for storing supports and other bits.
+
+![Support Bin](./inception/parts/renders/supportbin.png)
+![Support Grid](./inception/parts/renders/supportgrid.png)
+
+See [inception/README.md](inception/README.md) for details.
+
+## 📁 Standard Model Structure
+
+Each model folder follows this convention:
+
+```
+models/<name>/
+├── lib/           # Module/function definitions (no top-level geometry)
+├── parts/         # Renderable instances for Customizer, testing, and PNG renders
+│   └── renders/   # Auto-generated full F6 render PNGs (from scadm export-png)
+├── presets/       # (optional) Batch export variant collections
+├── flattened/     # Self-contained flattened exports (auto-generated)
+├── test/          # (optional) Test files for the model
+└── README.md
+```
+
+- **`lib/`**: Reusable modules and constants. These files define geometry but don't render anything at the top level.
+- **`parts/`**: Single-instance customizable files. Open in OpenSCAD Customizer to tweak parameters.
+- **`parts/renders/`**: Auto-generated full F6 render PNGs from `scadm export-png` (always rendered with `--render`, not OpenCSG previews). These are the only image files tracked in this repo.
+- **`flattened/`**: Generated by `scadm flatten`, inlines all local includes into a single self-contained file.
+- Simple models may skip `lib/` if the module definition and instantiation live in a single file under `parts/`.
+
+---
+
+**MakerWorld exports**: Files in `<model_type>/parts/` are automatically exported on commit. See [cmd/export/README.md](../cmd/export/README.md) for details.
