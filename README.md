@@ -28,6 +28,6 @@ Split Mode: Only works if `height units` is 2 or more. A 1u height panel is too 
 
 I am not a coder. I am patently terrible at this. I know how to describe what I want, but not how to make it happen. I rely on Rovo for that. 
 
-I'm also sure I haven't followed a single one of the guidelines for contributing, for which I apologize. At the same time, I'm not _entirely_ sorry because my primary goal was to just get a working MVP _for myself_. I hadn't planned on sharing it, but creating a fork and storing my new Franken-files in the forked repo so I don't lose them. If I print one of these reinforced panels and they _actually_ work as intended, _then_ I'll see about making this mess compliant as a "real" community contribution.
+I'm also sure I haven't followed a single one of the guidelines for contributing, for which I apologize. At the same time, I'm not _entirely_ sorry because my primary goal was to just get a working MVP _for myself_. I hadn't planned on sharing it, but creating a fork and storing my new Franken-files in the forked repo so I don't lose them seemed like a good idea. If I print one of these reinforced panels and they _actually_ work as intended, _then_ I'll see about making this mess compliant as a "real" community contribution.
 
 That said, if you, gentle reader, have stumbled on this repo by chance, I am defintely open to suggestions, recommendations, etc. I really have _no idea what I'm doing_. I'm a technical writer/artist/quality assurance veteran who MacGyvered something with determination, a prayer, and not much else.
