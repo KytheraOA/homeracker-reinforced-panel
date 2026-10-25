@@ -112,8 +112,16 @@ module rackpanel(panel_width = BASE_UNIT, panel_height_units = 1, bore_mode = 0,
   
   attachable_height = panel_height_units * BASE_UNIT;
   panel_dimensions = [panel_width, panel_depth, attachable_height];
+  brace_active = brace_enabled && (RP_BRACE_DEPTH - panel_depth) >= BASE_STRENGTH;
   brace_depth = RP_BRACE_DEPTH - panel_depth;
   lockpin_seat = attachable_height - TOLERANCE / 2;
+
+  module _back_brace(field_width, x_offset = 0) {
+    if (field_width > 2 * BASE_STRENGTH)
+      right(x_offset)
+        color_this(debug_colors ? HR_GREEN : RP_PRIMARY_COLOR)
+          truss_grid(size = [field_width, brace_depth, attachable_height], rows = brace_rows, chamfer_enabled = chamfer_enabled, anchor = FRONT);
+  }
 
   module _naked_panel() {
     attachable(CENTER, 0, UP, size = panel_dimensions) {
@@ -132,6 +140,9 @@ module rackpanel(panel_width = BASE_UNIT, panel_height_units = 1, bore_mode = 0,
       attachable(size = [w_half, panel_depth, attachable_height]) {
         left_half() _naked_panel();
         align(RIGHT, FRONT) split_connector(units = panel_height_units, knuckle_side = "left", debug_colors = debug_colors);
+        if (brace_active)
+          attach(BACK, FRONT, overlap = -HR_EPSILON)
+            _back_brace(w_half - RP_BRACE_SIDE_MARGIN, x_offset = -RP_BRACE_SIDE_MARGIN / 2);
         children();
       }
   }
@@ -142,13 +153,19 @@ module rackpanel(panel_width = BASE_UNIT, panel_height_units = 1, bore_mode = 0,
       attachable(size = [w_half, panel_depth, attachable_height]) {
         right_half() _naked_panel();
         align(LEFT, FRONT) split_connector(units = panel_height_units, knuckle_side = "right", debug_colors = debug_colors);
+        if (brace_active)
+          attach(BACK, FRONT, overlap = -HR_EPSILON)
+            _back_brace(w_half - RP_BRACE_SIDE_MARGIN, x_offset = RP_BRACE_SIDE_MARGIN / 2);
         children();
       }
   }
 
   if (split_mode == 0) {
     attachable(anchor, spin, orient, size = panel_dimensions) {
-      _naked_panel();
+      _naked_panel()
+        if (brace_active)
+          attach(BACK, FRONT, overlap = -HR_EPSILON)
+            _back_brace(panel_width - 2 * RP_BRACE_SIDE_MARGIN);
       children();
     }
   } else {
